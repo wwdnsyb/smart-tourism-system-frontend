@@ -64,9 +64,31 @@ const rules = {
 }
 
 // 加载订单数据
-const loadOrders = () => {
-  const orders = JSON.parse(localStorage.getItem('orders') || '[]')
-  orderList.value = orders
+// 核心：从 Java 后端加载真实订单
+const loadOrders = async () => {
+  if (!userInfo.value) return; // 没登录就不查
+  
+  try {
+    // 1. 发送请求，路径要和你后端的 @GetMapping("/user/{userName}") 对应
+    const res = await window.axios.get(`http://localhost:8080/api/orders/user/${userInfo.value.username}`);
+    
+    if (res.data.code === 200) {
+      // 2. 字段映射：把数据库的“坑”填到前端的“位”上
+      orderList.value = res.data.data.map(item => ({
+        id: item.id,
+        attractionName: item.hotelName, // 数据库里存的是景点/酒店名
+        date: item.checkIn,            // 游玩/入住日期
+        price: item.amount,            // 订单金额
+        status: item.status === 'PAID' ? '已支付' : item.status,
+        createTime: item.createTime,
+        // 列表图片：由于 Order 表没存图，这里可以根据 ID 随机一张或给个默认图
+        image: 'https://picsum.photos/200/150?random=' + item.id 
+      }));
+    }
+  } catch (error) {
+    console.error('获取订单失败:', error);
+    ElMessage.error('无法连接数据库获取订单');
+  }
 }
 
 // 加载收藏数据
@@ -159,12 +181,24 @@ const handlePasswordSubmit = async () => {
   }
 }
 
-// 监听标签页切换，确保收藏数据实时更新
+// 监听标签页切换，确保数据实时更新
 const handleTabChange = () => {
+  if (activeTab.value === 'orders') {
+    loadOrders() // 🔥 切换到订单页时，重新从后端拉取最新数据
+  }
   if (activeTab.value === 'favorites') {
     loadFavorites()
   }
 }
+onMounted(() => {
+  loadOrders() // 🔥 初始加载真实订单
+  loadFavorites()
+  
+  // 处理从详情页下单成功跳转过来的情况（带了 ?tab=orders 参数）
+  if (route.query.tab) {
+    activeTab.value = route.query.tab
+  }
+})
 </script>
 
 <template>

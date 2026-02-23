@@ -2,11 +2,17 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Location } from '@element-plus/icons-vue'
+// ⚠️ 新增引入了 Position 图标
+import { Location, Position } from '@element-plus/icons-vue'
+// ⚠️ 新增引入 RoutePlan 组件
+import RoutePlan from '@/components/RoutePlan.vue'
+// ⚠️ 新增引入获取用户信息的 composables
+import { useAuth } from '../composables/useAuth'
 
 const route = useRoute()
 const router = useRouter()
 const axios = window.axios
+const { userInfo } = useAuth() // 获取当前登录用户信息
 
 const hotel = ref({
   id: 0,
@@ -16,12 +22,18 @@ const hotel = ref({
   price: 0,
   address: '',
   description: '',
+  // ⚠️ 新增经纬度字段的初始值
+  longitude: null,
+  latitude: null
 })
 
 // 入住和离店日期
 const dateRange = ref([])
 // 房间数量
 const roomCount = ref(1)
+
+// ⚠️ 新增控制地图懒加载的开关
+const showMap = ref(false)
 
 // 获取数据库真实酒店详情
 const fetchHotelDetail = async () => {
@@ -44,7 +56,9 @@ onMounted(() => {
   fetchHotelDetail()
 })
 
-// 提交预订订单
+// ==========================================
+// 🔥 真实联网版：提交预订订单
+// ==========================================
 const confirmBooking = async () => {
   if (!dateRange.value || dateRange.value.length === 0) {
     ElMessage.warning('请选择入住和退房日期')
@@ -60,26 +74,34 @@ const confirmBooking = async () => {
       { confirmButtonText: '确认支付', cancelButtonText: '取消', type: 'warning' }
     )
     
-    // 模拟存入订单
-    const newOrder = {
-      id: Date.now(),
-      attractionName: hotel.value.name + ' (住宿)',
-      price: totalPrice,
-      date: dateRange.value[0], 
-      image: hotel.value.image,
-      status: '已支付',
-      createTime: new Date().toLocaleString()
+    // 组装要发给后端的真实数据，字段名对应你的 Java Entity
+    const orderData = {
+      hotelId: hotel.value.id,
+      hotelName: hotel.value.name,
+      userName: userInfo.value ? userInfo.value.username : '游客', 
+      phone: userInfo.value ? (userInfo.value.phone || '暂无手机号') : '暂无手机号',
+      
+      checkIn: dateRange.value[0], 
+      checkOut: dateRange.value[1],
+      
+      amount: totalPrice
     }
-    const orders = JSON.parse(localStorage.getItem('orders') || '[]')
-    orders.push(newOrder)
-    localStorage.setItem('orders', JSON.stringify(orders))
+
+    // 发送真实 POST 请求到你的 Java 后端
+    await axios.post('http://localhost:8080/api/orders', orderData)
     
     ElMessage.success('支付成功，期待您的入住！')
+    
     setTimeout(() => {
+      // 支付成功后跳回个人中心的订单页
       router.push({ path: '/user', query: { tab: 'orders' } })
     }, 1000)
+    
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error('支付异常')
+    if (error !== 'cancel') {
+      console.error('下单失败:', error)
+      ElMessage.error('支付异常，请检查后端接口是否报错')
+    }
   }
 }
 </script>
@@ -130,6 +152,41 @@ const confirmBooking = async () => {
           </el-col>
         </el-row>
       </el-card>
+
+      <el-row :gutter="0" style="margin-top: 40px;">
+        <el-col :span="24">
+          <el-card class="route-card" shadow="hover">
+            <template #header>
+              <div class="card-header">
+                <span class="section-title" style="display: flex; align-items: center; font-weight: bold; font-size: 18px;">
+                  <el-icon style="margin-right: 8px; color: #409eff;"><Location /></el-icon>
+                  酒店位置与交通规划
+                </span>
+              </div>
+            </template>
+            
+            <div class="route-wrapper" v-if="hotel.longitude && hotel.latitude">
+              <div v-if="!showMap" class="map-placeholder">
+                <el-icon class="map-icon"><Position /></el-icon>
+                <p>点击加载高德地图路线规划，省流量更极速</p>
+                <el-button type="primary" round size="large" @click="showMap = true">
+                  🌍 开启路线导航
+                </el-button>
+              </div>
+              
+              <RoutePlan 
+                v-else
+                :destName="hotel.name" 
+                :destLngLat="[hotel.longitude, hotel.latitude]" 
+              />
+            </div>
+            
+            <div v-else class="no-coords" style="padding: 40px 0;">
+              <el-empty description="该酒店暂未设置坐标信息，无法开启导航" />
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
     </div>
   </div>
 </template>
@@ -148,4 +205,36 @@ const confirmBooking = async () => {
 .symbol { font-size: 20px; margin-right: 4px; }
 .unit { font-size: 16px; color: #909399; font-weight: normal; margin-left: 4px; }
 .submit-btn { width: 100%; margin-top: 10px; font-size: 18px; font-weight: bold; }
+
+/* ========================================== */
+/* ⚠️ 新增：地图懒加载占位区样式 ⚠️ */
+/* ========================================== */
+.route-card {
+  border-radius: 12px;
+}
+.map-placeholder {
+  height: 200px;
+  background-color: #f8f9fa;
+  border: 2px dashed #dcdfe6;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #909399;
+  transition: all 0.3s;
+}
+.map-placeholder:hover {
+  border-color: #409eff;
+  background-color: #ecf5ff;
+}
+.map-placeholder .map-icon {
+  font-size: 40px;
+  color: #a0cfff;
+  margin-bottom: 10px;
+}
+.map-placeholder p {
+  margin-bottom: 20px;
+  font-size: 14px;
+}
 </style>

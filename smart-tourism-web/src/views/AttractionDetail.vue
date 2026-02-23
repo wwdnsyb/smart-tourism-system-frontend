@@ -2,10 +2,9 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Picture, Star, StarFilled } from '@element-plus/icons-vue'
+import { Picture, Star, StarFilled, Position, Location } from '@element-plus/icons-vue' // 增加了 Position 和 Location 以支持地图UI
 import { useAuth } from '../composables/useAuth'
-// ❌ 删除了 import { getAttractions } from '../utils/data'
-
+import RoutePlan from '@/components/RoutePlan.vue'
 const route = useRoute()
 const router = useRouter()
 const { userInfo } = useAuth()
@@ -36,8 +35,11 @@ const comments = ref([])
 const newComment = ref('')
 const newRating = ref(5)
 
+// 控制地图是否显示的开关，默认不显示
+const showMap = ref(false)
+
 // ---------------------------------------------------------
-// 🔥 核心修改：向 Java 后端请求真实的单个景点详情
+// 获取真实的单个景点详情
 // ---------------------------------------------------------
 const loadAttractionDetail = async () => {
   const id = Number(route.params.id)
@@ -47,11 +49,9 @@ const loadAttractionDetail = async () => {
   }
   
   try {
-    // 调用后端 @GetMapping("/{id}") 接口
     const res = await axios.get(`http://localhost:8080/api/scenic-spots/${id}`)
     const data = res.data
     
-    // 更新数据，注意把后端的 imageUrl 映射给前端的 image
     attraction.value = {
       ...data,
       image: data.imageUrl || data.image, 
@@ -59,15 +59,20 @@ const loadAttractionDetail = async () => {
       openTime: data.openTime || '08:00 - 18:00',
       address: data.address || '暂无地址'
     }
+
+    // 👇 === 强制注入测试坐标，激活高德地图 === 👇
+    attraction.value.longitude = 116.397026; // 故宫经度
+    attraction.value.latitude = 39.918058;   // 故宫纬度
+    // 👆 ======================================= 👆
+
   } catch (error) {
     console.error('获取详情失败:', error)
     ElMessage.error('获取景点详情失败，请检查后端服务')
-    // 如果获取失败，两秒后自动返回首页
     setTimeout(() => router.push('/'), 2000)
   }
 }
 
-// 加载评论 (保持你的本地逻辑不变)
+// 加载评论 (保持本地逻辑)
 const loadComments = () => {
   const id = Number(route.params.id)
   const key = `comments_${id}`
@@ -119,7 +124,7 @@ const submitComment = () => {
 
 // 初始化加载景点数据和评论
 onMounted(() => {
-  loadAttractionDetail() // 现在这里会去查数据库了！
+  loadAttractionDetail()
   loadComments()
   
   // 初始化收藏状态
@@ -128,7 +133,9 @@ onMounted(() => {
   isFavorited.value = favorites.some(item => item.id === currentId)
 })
 
-// 预订门票 (保持不变)
+// ==========================================
+// 🔥 核心修改：真实联网版，提交门票预订订单
+// ==========================================
 const openBookingDialog = async () => {
   if (!userInfo.value) {
     ElMessage.warning('请先登录')
@@ -145,26 +152,33 @@ const openBookingDialog = async () => {
       '支付确认',
       { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' }
     )
-    const newOrder = {
-      id: Date.now(),
-      attractionName: attraction.value.name,
-      price: attraction.value.price,
-      date: visitDate.value,
-      image: attraction.value.image,
-      status: '已支付',
-      createTime: new Date().toLocaleString()
+    
+    // 组装要发给后端的真实数据，字段名对应你的 Java Entity (复用 orders 表)
+    const orderData = {
+      hotelId: attraction.value.id, 
+      hotelName: attraction.value.name + ' (门票)', 
+      userName: userInfo.value.username || '测试用户', 
+      phone: userInfo.value.phone || '13888888888',
+      
+      checkIn: visitDate.value, 
+      checkOut: visitDate.value, 
+      
+      amount: attraction.value.price
     }
-    const orders = JSON.parse(localStorage.getItem('orders') || '[]')
-    orders.push(newOrder)
-    localStorage.setItem('orders', JSON.stringify(orders))
+
+    // 🚀 向后端发送 POST 请求，把订单存入 MySQL
+    await axios.post('http://localhost:8080/api/orders', orderData)
     
     ElMessage.success('支付成功！')
+    
     setTimeout(() => {
       router.push({ path: '/user', query: { tab: 'orders' } })
     }, 1000)
+    
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('支付失败，请重试')
+      console.error('门票下单失败:', error)
+      ElMessage.error('支付失败，请检查后端服务是否正常')
     }
   }
 }
@@ -197,18 +211,15 @@ const handleFavorite = () => {
 
 <template>
   <div class="attraction-detail">
-    <!-- 面包屑导航 -->
     <div class="breadcrumb-container">
       <el-breadcrumb separator=">">
         <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
         <el-breadcrumb-item>景点详情</el-breadcrumb-item>
       </el-breadcrumb>
     </div>
-
-    <!-- 主体内容 -->
+    
     <div class="content-container">
       <el-row :gutter="40">
-        <!-- 左侧：景点封面图 -->
         <el-col :xs="24" :sm="24" :md="14" :lg="14">
           <div class="image-wrapper">
             <el-image
@@ -226,13 +237,10 @@ const handleFavorite = () => {
           </div>
         </el-col>
 
-        <!-- 右侧：景点信息区 -->
         <el-col :xs="24" :sm="24" :md="10" :lg="10">
           <div class="info-section">
-            <!-- 景点名称 -->
             <h1 class="attraction-name">{{ attraction.name }}</h1>
 
-            <!-- 评分 -->
             <div class="rating-section">
               <el-rate
                 v-model="attraction.rating"
@@ -244,14 +252,12 @@ const handleFavorite = () => {
               />
             </div>
 
-            <!-- 价格 -->
             <div class="price-section">
               <span class="price-symbol">¥</span>
               <span class="price-value">{{ attraction.price }}</span>
               <span class="price-unit">/人</span>
             </div>
 
-            <!-- 详细信息 -->
             <el-descriptions
               :column="1"
               border
@@ -265,13 +271,11 @@ const handleFavorite = () => {
               </el-descriptions-item>
             </el-descriptions>
 
-            <!-- 简介 -->
             <div class="description-section">
               <h3 class="section-title">景点简介</h3>
               <p class="description-text">{{ attraction.description }}</p>
             </div>
 
-            <!-- 日期选择 -->
             <div style="margin-bottom: 20px;">
               <span style="margin-right: 10px; font-weight: bold;">选择日期：</span>
               <el-date-picker
@@ -283,7 +287,6 @@ const handleFavorite = () => {
               />
             </div>
             
-            <!-- 操作按钮 -->
             <div class="action-buttons">
               <el-button
                 type="primary"
@@ -308,8 +311,42 @@ const handleFavorite = () => {
         </el-col>
       </el-row>
 
-      <!-- 评论留言模块 -->
-      <el-row :gutter="0" style="margin-top: 60px;">
+      <el-row :gutter="0" style="margin-top: 40px;">
+        <el-col :span="24">
+          <el-card class="route-card" shadow="hover">
+            <template #header>
+              <div class="card-header">
+                <span class="section-title" style="display: flex; align-items: center; font-weight: bold; font-size: 18px;">
+                  <el-icon style="margin-right: 8px; color: #409eff;"><Location /></el-icon>
+                  路线导航与交通规划
+                </span>
+              </div>
+            </template>
+            
+            <div class="route-wrapper" v-if="attraction.longitude && attraction.latitude">
+              <div v-if="!showMap" class="map-placeholder">
+                <el-icon class="map-icon"><Position /></el-icon>
+                <p>点击加载高德地图路线规划，省流量更极速</p>
+                <el-button type="primary" round size="large" @click="showMap = true">
+                  🌍 开启路线导航
+                </el-button>
+              </div>
+              
+              <RoutePlan 
+                v-else
+                :destName="attraction.name" 
+                :destLngLat="[attraction.longitude, attraction.latitude]" 
+              />
+            </div>
+            
+            <div v-else class="no-coords" style="padding: 40px 0;">
+              <el-empty description="该景点暂未设置坐标信息，无法开启导航" />
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-row :gutter="0" style="margin-top: 40px;">
         <el-col :span="24">
           <el-card class="comments-card" shadow="hover">
             <template #header>
@@ -318,7 +355,6 @@ const handleFavorite = () => {
               </div>
             </template>
             
-            <!-- 评论列表 -->
             <div class="comments-list">
               <template v-if="comments.length === 0">
                 <div class="no-comments">
@@ -343,8 +379,7 @@ const handleFavorite = () => {
                 </div>
               </template>
             </div>
-            
-            <!-- 发表评论 -->
+
             <div class="comment-form">
               <h4 class="form-title">发表评价</h4>
               <div class="form-content">
@@ -370,8 +405,6 @@ const handleFavorite = () => {
         </el-col>
       </el-row>
     </div>
-
-
   </div>
 </template>
 
@@ -637,5 +670,31 @@ const handleFavorite = () => {
   .form-content {
     padding: 15px;
   }
+}
+/* 地图懒加载占位区样式 */
+.map-placeholder {
+  height: 200px;
+  background-color: #f8f9fa;
+  border: 2px dashed #dcdfe6;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #909399;
+  transition: all 0.3s;
+}
+.map-placeholder:hover {
+  border-color: #409eff;
+  background-color: #ecf5ff;
+}
+.map-placeholder .map-icon {
+  font-size: 40px;
+  color: #a0cfff;
+  margin-bottom: 10px;
+}
+.map-placeholder p {
+  margin-bottom: 20px;
+  font-size: 14px;
 }
 </style>

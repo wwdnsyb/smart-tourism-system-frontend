@@ -65,9 +65,8 @@ const handleBook = (hotel) => {
     router.push('/login')
     return
   }
-  ElMessage.success(`准备预订：${hotel.name}，跳转开发中...`)
-  // 等你以后建了 HotelDetail.vue 可以用这行：
-  router.push({ name: 'hotel-detail', params: { id: hotel.id } })
+  // 🔥 这里已经修改：直接跳转到该酒店的详情页面
+  router.push({ path: `/hotel/${hotel.id}` })
 }
 </script>
 
@@ -129,7 +128,7 @@ const handleBook = (hotel) => {
       </div>
 
       <el-empty v-if="filteredHotels.length === 0" description="没有找到符合条件的酒店" />
-
+      
       <el-row :gutter="24" class="hotel-grid">
         <el-col
           v-for="hotel in filteredHotels"
