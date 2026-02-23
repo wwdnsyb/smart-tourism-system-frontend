@@ -136,8 +136,6 @@ const handleProfileSubmit = () => {
   }, 1000)
 }
 
-// 修改 src/views/UserView.vue 中的 handlePasswordSubmit 函数
-
 // --- 核心修改：连接后端数据库真实修改密码 ---
 const handlePasswordSubmit = async () => {
   if (!passwordForm.value.oldPassword || !passwordForm.value.newPassword || !passwordForm.value.confirmPassword) {
@@ -181,18 +179,44 @@ const handlePasswordSubmit = async () => {
   }
 }
 
+// ==========================================
+// 🔥 新增：智能推荐算法逻辑
+// ==========================================
+const recommendList = ref([])
+const recommendLoading = ref(false)
+
+const loadRecommendations = async () => {
+  if (!userInfo.value) return
+  recommendLoading.value = true
+  
+  try {
+    // 调用后端刚才写的推荐接口
+    const res = await window.axios.get(`http://localhost:8080/api/scenic-spots/recommend/${userInfo.value.username}`)
+    if (res.data.code === 200) {
+      recommendList.value = res.data.data
+    }
+  } catch (error) {
+    console.error('获取智能推荐失败:', error)
+  } finally {
+    recommendLoading.value = false
+  }
+}
+
 // 监听标签页切换，确保数据实时更新
 const handleTabChange = () => {
   if (activeTab.value === 'orders') {
     loadOrders() // 🔥 切换到订单页时，重新从后端拉取最新数据
+    loadRecommendations() // 重新拉取推荐
   }
   if (activeTab.value === 'favorites') {
     loadFavorites()
   }
 }
+
 onMounted(() => {
   loadOrders() // 🔥 初始加载真实订单
   loadFavorites()
+  loadRecommendations() // 🔥 初始加载智能推荐
   
   // 处理从详情页下单成功跳转过来的情况（带了 ?tab=orders 参数）
   if (route.query.tab) {
@@ -251,7 +275,36 @@ onMounted(() => {
                 </el-table>
               </template>
             </div>
-          </el-tab-pane>
+
+            <div class="recommend-section" v-if="recommendList && recommendList.length > 0" v-loading="recommendLoading">
+              <div class="recommend-header">
+                <h3 style="margin: 0; color: #303133; display: flex; align-items: center;">
+                  ✨ 猜你喜欢 
+                  <el-tag size="small" type="warning" effect="light" style="margin-left: 10px; border-radius: 12px;">
+                    AI 智能推荐
+                  </el-tag>
+                  <span style="font-size: 13px; color: #909399; font-weight: normal; margin-left: 10px;">
+                    基于您的游玩偏好生成
+                  </span>
+                </h3>
+              </div>
+              
+              <el-row :gutter="20" style="margin-top: 20px;">
+                <el-col :span="6" v-for="item in recommendList" :key="item.id">
+                  <el-card class="recommend-card" shadow="hover" :body-style="{ padding: '0px' }" @click="router.push(`/attraction/${item.id}`)">
+                    <img :src="item.imageUrl || item.cover || `https://picsum.photos/300/200?random=${item.id}`" class="recommend-img">
+                    <div style="padding: 14px;">
+                      <div class="recommend-title">{{ item.name }}</div>
+                      <div class="recommend-bottom">
+                        <span class="recommend-price">¥{{ item.price || 99 }}</span>
+                        <el-button type="primary" size="small" plain round>去看看</el-button>
+                      </div>
+                    </div>
+                  </el-card>
+                </el-col>
+              </el-row>
+            </div>
+            </el-tab-pane>
           
           <el-tab-pane label="个人资料" name="profile">
             <div class="profile-tab">
@@ -533,5 +586,51 @@ onMounted(() => {
     width: 60px;
     height: 60px;
   }
+}
+
+/* ========================================== */
+/* 🔥 推荐算法模块样式 */
+/* ========================================== */
+.recommend-section {
+  margin-top: 40px;
+  border-top: 2px dashed #ebeef5;
+  padding-top: 25px;
+}
+.recommend-card {
+  border-radius: 10px;
+  overflow: hidden;
+  transition: transform 0.3s, box-shadow 0.3s;
+  cursor: pointer;
+  border: none;
+  background: #fdfdfd;
+}
+.recommend-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.1);
+}
+.recommend-img {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  display: block;
+}
+.recommend-title {
+  font-size: 16px;
+  font-weight: bold;
+  color: #303133;
+  margin-bottom: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recommend-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.recommend-price {
+  color: #f56c6c;
+  font-size: 20px;
+  font-weight: bold;
 }
 </style>
