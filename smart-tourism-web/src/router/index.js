@@ -5,6 +5,21 @@ import { ElMessage } from 'element-plus'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
+  scrollBehavior(to, from, savedPosition) {
+    // 如果是通过浏览器前进/后退，保持原位
+    if (savedPosition) {
+      return savedPosition
+    }
+    // 如果链接带了锚点（比如 /#attractions-list），平滑滚动到锚点位置
+    if (to.hash) {
+      return {
+        el: to.hash,
+        behavior: 'smooth',
+      }
+    }
+    // 默认情况：每次切换页面，滚动条回到最顶部
+    return { top: 0 }
+  },
   routes: [
     {
       path: '/',
@@ -95,5 +110,6 @@ router.beforeEach((to, from, next) => {
   // 场景 3：其他公开页面（首页、酒店列表等），直接放行
   next()
 })
+
 
 export default router

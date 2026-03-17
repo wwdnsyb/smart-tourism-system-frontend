@@ -37,10 +37,16 @@
           </div>
         </div>
 
+        <div class="quick-actions">
+          <div class="action-tag" @click="useQuickAction('plan')">🎒 一键行程规划</div>
+          <div class="action-tag" @click="useQuickAction('food')">🍜 当地美食推荐</div>
+          <div class="action-tag" @click="useQuickAction('hotel')">🏨 特色住宿指南</div>
+        </div>
+
         <div class="input-box">
           <el-input 
             v-model="inputVal" 
-            placeholder="问问票价、天气..." 
+            :placeholder="currentPlaceholder" 
             @keyup.enter="handleSend" 
             size="small"
           >
@@ -76,6 +82,10 @@ import { ChatDotRound, Close, Delete, ArrowDown } from '@element-plus/icons-vue'
 const isOpen = ref(false)
 const isTyping = ref(false)
 const inputVal = ref('')
+// 🔥 新增：动态虚体字与快捷动作记录
+const currentPlaceholder = ref('问问票价、天气...') 
+const pendingActionType = ref('') 
+
 const msgRef = ref(null)
 const messages = ref([
   { text: '👋 您好！我是您的AI导游。有什么可以帮您的吗？', isMe: false }
@@ -83,7 +93,6 @@ const messages = ref([
 
 // --- Markdown 渲染函数 ---
 const renderMD = (text) => {
-  // 这里的 window.marked 来自 index.html 引入的 CDN
   if (window.marked && typeof window.marked.parse === 'function') {
     return window.marked.parse(text || '')
   }
@@ -109,35 +118,22 @@ const callAiBackend = async (userText) => {
     let aiReplyBuffer = ''
     isTyping.value = false 
 
-    // 🔥🔥🔥 修复核心：定义缓冲区，解决丢字问题 🔥🔥🔥
     let buffer = ''
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       
-      // 1. 解码当前收到的数据片段
       const chunk = decoder.decode(value, { stream: true })
-      
-      // 2. 拼接到缓冲区
       buffer += chunk
-      
-      // 3. 按换行符拆分消息 (SSE 协议以 \n 分隔)
       const lines = buffer.split('\n')
-      
-      // 4. 🔥 关键步骤：取出最后一个可能不完整的片段，放回 buffer 等待下一次拼接
-      // 如果没有这一步，断在中间的汉字就会丢失！
       buffer = lines.pop() 
 
       for (const line of lines) {
         const trimmedLine = line.trim()
         if (trimmedLine.startsWith('data:')) {
           const content = trimmedLine.substring(5) 
-          
-          // 🔥 核心修改：把后端的 [BR] 替换回 \n 换行符
-          // 这样 marked 库才能正确识别列表和段落
           const decodedContent = content.replaceAll('[BR]', '\n');
-
           aiReplyBuffer += decodedContent
           messages.value[aiMsgIndex].text = aiReplyBuffer
           scrollToBottom()
@@ -156,16 +152,57 @@ const callAiBackend = async (userText) => {
 const handleSend = async () => {
   const text = inputVal.value.trim()
   if (!text) return
-  messages.value.push({ text: text, isMe: true })
+
+  let finalSendText = text
+
+  // 🔥 核心逻辑：如果是快捷指令，将用户填的短地点拼接成专业长提示词
+  if (pendingActionType.value === 'plan') {
+    finalSendText = `你好！我打算去【${text}】旅游，请帮我生成一份详细的旅游攻略。要求包含：1.必去景点；2.特色酒店；3.地道美食；4.景点背后的历史文化介绍！`
+  } else if (pendingActionType.value === 'food') {
+    finalSendText = `请给我推荐几个【${text}】必吃的地道特色美食和老字号餐厅！`
+  } else if (pendingActionType.value === 'hotel') {
+    finalSendText = `我想在【${text}】订一家酒店，要求交通便利、性价比高，有什么推荐吗？`
+  }
+
+  // 发送后立刻重置回默认状态
+  pendingActionType.value = ''
+  currentPlaceholder.value = '问问票价、天气...'
+
+  messages.value.push({ text: finalSendText, isMe: true })
   inputVal.value = ''
   scrollToBottom()
   isTyping.value = true
-  await callAiBackend(text)
+  
+  await callAiBackend(finalSendText)
 }
 
 const clearMessages = () => messages.value = []
 const scrollToBottom = () => {
   nextTick(() => { if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight })
+}
+
+// 🔥 优化：快捷指令点击事件，仅改变虚体字和记录动作状态
+const useQuickAction = (type) => {
+  pendingActionType.value = type
+  inputVal.value = '' // 清空实体字
+  
+  if (type === 'plan') {
+    currentPlaceholder.value = '👉 行程规划：请输入目的地 (如: 北京)'
+  } else if (type === 'food') {
+    currentPlaceholder.value = '👉 美食推荐：请输入目的地 (如: 成都)'
+  } else if (type === 'hotel') {
+    currentPlaceholder.value = '👉 住宿指南：请输入目的地 (如: 杭州)'
+  }
+}
+
+// 全局监听逻辑（配合首页的大按钮）
+const handleGlobalCall = (e) => {
+  const text = e.detail || '帮我生成一份专属旅游攻略！'
+  isOpen.value = true // 打开面板
+  setTimeout(() => {
+    inputVal.value = text
+    handleSend() // 自动发送
+  }, 300)
 }
 
 // --- 定位与拖拽逻辑 ---
@@ -201,8 +238,13 @@ onMounted(() => {
   pos.value.x = window.innerWidth - 80 
   pos.value.y = window.innerHeight - 150
   window.addEventListener('resize', handleResize)
+  window.addEventListener('call-ai-assistant', handleGlobalCall)
 })
-onUnmounted(() => window.removeEventListener('resize', handleResize))
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  window.removeEventListener('call-ai-assistant', handleGlobalCall)
+})
 
 const startDrag = (e) => {
   isDragging.value = true
@@ -255,7 +297,6 @@ const handleClick = () => {
 </script>
 
 <style scoped>
-/* 1. 锚点容器 */
 .assistant-anchor {
   position: fixed;
   z-index: 99999;
@@ -267,7 +308,6 @@ const handleClick = () => {
   pointer-events: auto;
 }
 
-/* 2. 悬浮球 */
 .float-btn {
   width: 100%;
   height: 100%;
@@ -285,7 +325,6 @@ const handleClick = () => {
 .float-btn:active { cursor: grabbing; transform: scale(0.95); }
 .float-btn.active { background: #909399; transform: rotate(90deg); }
 
-/* 3. 聊天窗口 */
 .chat-window {
   position: absolute;
   width: 320px;
@@ -299,25 +338,13 @@ const handleClick = () => {
   border: 1px solid #ebeef5;
 }
 
-/* 自动对齐模式 */
 .align-right { right: 0; }
 .align-left { left: 0; }
-
-.align-up {
-  bottom: 100%;
-  margin-bottom: 15px;
-  transform-origin: bottom right;
-}
+.align-up { bottom: 100%; margin-bottom: 15px; transform-origin: bottom right; }
 .align-left.align-up { transform-origin: bottom left; }
-
-.align-down {
-  top: 100%;
-  margin-top: 15px;
-  transform-origin: top right;
-}
+.align-down { top: 100%; margin-top: 15px; transform-origin: top right; }
 .align-left.align-down { transform-origin: top left; }
 
-/* 内部样式 */
 .window-header {
   height: 46px;
   background: linear-gradient(to right, #409EFF, #53a8ff);
@@ -344,7 +371,6 @@ const handleClick = () => {
 .msg-row { display: flex; }
 .msg-row.is-me { justify-content: flex-end; }
 
-/* 👇👇👇 优化：增加了左对齐、行高，保证 Markdown 易读 */
 .bubble {
   max-width: 85%;
   padding: 10px 14px;
@@ -359,28 +385,47 @@ const handleClick = () => {
 }
 .is-me .bubble { background: #409EFF; color: #fff; border-bottom-right-radius: 2px; }
 
-/* 👇👇👇 新增：Markdown 样式微调 */
-.markdown-body {
-  white-space: pre-wrap; /* 保证换行不丢失 */
-  font-family: inherit; /* 继承字体 */
-}
+.markdown-body { white-space: pre-wrap; font-family: inherit; }
 .markdown-body :deep(p) { margin: 0 0 8px 0; }
-
-/* 🔥🔥🔥 核心修复：最后一个段落去掉下边距，防止气泡底部留白 🔥🔥🔥 */
-.markdown-body :deep(p):last-child {
-  margin-bottom: 0;
-}
-
+.markdown-body :deep(p):last-child { margin-bottom: 0; }
 .markdown-body :deep(strong) { color: #d63384; font-weight: bold; }
-/* 让列表有缩进，不再挤在左边 */
 .markdown-body :deep(ul), .markdown-body :deep(ol) { margin: 4px 0 4px 20px; padding: 0; }
 .markdown-body :deep(li) { margin-bottom: 4px; }
+
+/* 🔥 新增：快捷指令区样式 */
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap; /* 核心代码：允许换行 */
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fff;
+  border-top: 1px solid #f5f7fa;
+}
+.quick-actions::-webkit-scrollbar {
+  display: none;
+}
+.action-tag {
+  font-size: 12px;
+  color: #409eff;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  padding: 6px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-weight: bold;
+}
+.action-tag:hover {
+  background: #409eff;
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+}
 
 .input-box { padding: 10px; border-top: 1px solid #eee; background: #fff; }
 .typing span { animation: blink 1.4s infinite both; margin: 0 2px; }
 @keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
 
-/* 动画效果 */
 .scale-pop-enter-active, .scale-pop-leave-active { transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .scale-pop-enter-from, .scale-pop-leave-to { opacity: 0; transform: scale(0.5); }
-</style>  =                                                                                                                                                                                                                                                                                                                                                                                   
+</style>
